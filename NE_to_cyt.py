@@ -2,12 +2,15 @@ import os
 from collections import OrderedDict
 import numpy as np
 from neuron import rxd, h
-from .ca_params import *
+
+my_loc = os.path.dirname(os.path.abspath(__file__))
+params_file = os.path.join(my_loc, "ca_params.py")
+c_unit = 6.0221409e5
 
 
 class InsideER:
     sections = []
-    def __init__(self):
+    def __init__(self, params=params_file):
         ER = h.Section(name="endoplasmic_reticulum")
         #cm the same as cell membrane cm
         #rm ~ same as dendritic membrane
