@@ -26,17 +26,19 @@ class InsideER:
         # in 20 C probably ~ 80 mV
         ER_comp.nseg = 101
         self.sections.append(ER)
-        
+        self.cyt_buffers = []
+        self.ER_buffers = []
         self.reactions = []
         self.add_rxd_regions()
         self.add_species()
         self.add_diffusion()
+        self.add_buffer_reactions(self.buffers)
 
     def outermost_shell(diam, shell_width):
         return 2*shell_width/diam
 
 
-    def add_inside_shells(self, section, start_from, first_shell):
+    def add_ER_shells(self, section, start_from, first_shell):
         name = section.name()
         which_dend = name.replace("[", "").replace("]", "")
         i = start_from
@@ -49,25 +51,25 @@ class InsideER:
                                                  which_dend,
                                                  geometry=rxd.membrane())
                 self.factors[name] = []
-                self.inside_shells[name] = []
+                self.ER_shells[name] = []
                 
             inner = 1-(sum(self.factors[name])+new_factor)
             if inner < 0:
                 inner = 0
             outer = 1-sum(self.factors[name])
             if i == 0 and inner == 0:
-                self.inside_shells[name].append(rxd.Region(section, nrn_region='i',
+                self.ER_shells[name].append(rxd.Region(section, nrn_region='i',
                                                     name="%s_InsideShell_%d" %
                                                     (which_dend, i)))
             else:
                 if i:
-                    self.inside_shells[name].append(rxd.Region(section,
+                    self.ER_shells[name].append(rxd.Region(section,
                                                         geometry=rxd.Shell(inner,
                                                                            outer),
                                                         name="%s_InsideShell_%d" %
                                                         (which_dend, i)))
                 else:
-                    self.inside_shells[name].append(rxd.Region(section,
+                    self.ER_shells[name].append(rxd.Region(section,
                                                         nrn_region='i',
                                                         geometry=rxd.Shell(inner,
                                                                            outer),
@@ -93,16 +95,16 @@ class InsideER:
                 new_factor = 2*new_factor 
             i = i+1
 
-    def add_outside_shells(self, section, start_from, first_shell, how_many_shells):
+    def add_cyt_shells(self, section, start_from, first_shell, how_many_shells):
         name = section.name()
         which_dend = name.replace("[", "").replace("]", "")
         for i in range(how_many_shells):
             if i == 0:
-                self.outside_shells[name] = []
+                self.cyt_shells[name] = []
             inner = (i+1)*first_shell
             outer = (i+2)*first_shell
             if i == 0:
-                self.outside_shells[name].append(rxd.Region(section,
+                self.cyt_shells[name].append(rxd.Region(section,
                                                             nrn_region='o',
                                                             geometry=rxd.Shell(inner,
                                                                                outer),
@@ -110,7 +112,7 @@ class InsideER:
                                                             (which_dend, i)))
             else:
  
-                self.outside_shells[name].append(rxd.Region(section,
+                self.cyt_shells[name].append(rxd.Region(section,
                                                            geometry=rxd.Shell(inner,
                                                                               outer),
                                                            name="%s_OutsideShell_%d" %
@@ -126,8 +128,8 @@ class InsideER:
             
     def add_rxd_regions(self):
         self.membrane = OrderedDict()
-        self.inside_shells = OrderedDict()
-        self.outside_shells = OrderedDict()
+        self.ER_shells = OrderedDict()
+        self.cyt_shells = OrderedDict()
         self.inside_borders = OrderedDict()
         self.outside_borders = OrderedDict()
         self.factors = OrderedDict()  #  membrane_shell_width/max_radius
@@ -142,8 +144,8 @@ class InsideER:
             print("Add rxd to %s" % sec.name())
             factor = 2*membrane_shell_width/sec.diam
 
-            self.add_inside_shells(sec, 0, factor)
-            self.add_outside_shells(sec, 0, membrane_shell_width, 3)
+            self.add_ER_shells(sec, 0, factor)
+            self.add_cyt_shells(sec, 0, membrane_shell_width, 3)
   
     def add_species(self):
         regions = self.shell_list 
@@ -161,7 +163,8 @@ class InsideER:
         ip3_init = self.params["ip3_init"]
         calr_tot = self.params["calr_tot"]
         calr_bound = self.params["calr_bound"]
-        self.ip3 = rxd.Species(self.shell_list, d=ip3Diff, initial=ip3_init,
+        self.ip3 = rxd.Species(self.outside_shell_list, d=ip3Diff,
+                               initial=ip3_init,
                                atolscale=1e-9)
         self.calr = rxd.Species(self.ER_regions,
                                 initial=calr_tot-calr_bound)
@@ -169,28 +172,100 @@ class InsideER:
 
         self.serca = rxd.Species(self.membrane_list, initial=serca)
         self.sercaca = rxd.Species(self.membrane_list, initial=sercaca)
+        self.add_cytosol_buffers()
 
+    def add_cytosol_buffers(self):
+        self.buffers = OrderedDict()
+        self.indicator = None
+        self.add_calmodulin()
+        calbDiff = self.params["calbDiff"]
+        calbindin_tot = self.params["calbindin_tot"]
+        calbca = self.params["calbca"]
+        self.calb = rxd.Species(self.outside_shell_list, d=calbDiff,
+                                initial=calbindin_tot-calbca,
+                                name='Calbindin',
+                                charge=0, atolscale=1e-9)
+        self.calbca = rxd.Species(self.outside_shell_list, d=calbDiff,
+                                  initial=calbca,
+                                  name='CalbindinCa',
+                                  charge=0, atolscale=1e-9)
+        self.buffers["Calb"] = [self.calb, self.calbca]
+        fixed_buffer_tot = self.params["fixed_buffer_tot"]
+        fixed_buffer_ca = self.params["fixed_buffer_ca"]
+        self.fixed = rxd.Species(self.outside_shell_list,
+                                 initial=fixed_buffer_tot
+                                 -fixed_buffer_ca,
+                                 name='FixedBuffer',
+                                 charge=0, atolscale=1e-9)
+        self.fixedca = rxd.Species(self.outside_shell_list,
+                                   initial=fixed_buffer_ca,
+                                   name='FixedBufferCa',
+                                   charge=0, atolscale=1e-9)
+        camDiff = self.params["camDiff"]
+        calmodulin_tot = self.params["calmodulin_tot"]
+        camn = self.params["camn"]
+        camc = self.params["camc"]
+        self.cam = rxd.Species(self.outside_shell_list, d=camDiff,
+                               initial=calmodulin_tot-camn-camc,
+                               name='CaM', charge=0, atolscale=1e-9)
+        self.camn = rxd.Species(self.outside_shell_list, d=camDiff, initial=camn,
+                                name='CaMN',
+                                charge=0, atolscale=1e-9)
+        self.camc = rxd.Species(self.outside_shell_list, d=camDiff, initial=camc,
+                                name='CaMC',
+                                charge=0, atolscale=1e-9)
+        self.buffers["CaM"] = [self.cam, self.camn, self.camc]
+
+
+    def add_buffer_reactions(self, buffer_list):
+        kf_fixed_b = self.params["kf_fixed_b"]
+        kb_fixed_b = self.params["kb_fixed_b"]
+        kf_camn = self.params["kf_camn"]
+        kb_camn = self.params["kb_camn"]
+        kf_camc = self.params["kf_camc"]
+        kb_camc = self.params["kb_camc"]
+        kf_calbindin = self.params["kf_calbindin"]
+        kb_calbindin = self.params["kb_calbindin"]
+        kf_magnesium_green = self.params["kf_magnesium_green"]
+        kb_magnesium_green = self.params["kb_magnesium_green"]
+        
+        fixed_rxn = rxd.Reaction(self.fixed + self.ca, self.fixedca,
+                                 kf_fixed_b,
+                                 kb_fixed_b)
+        self.reactions.append(fixed_rxn)
+        rn = rxd.Reaction(self.cam + self.ca, self.camn, kf_camn,
+                          kb_camn)
+        rc = rxd.Reaction(self.cam + self.ca, self.camc, kf_camc, kb_camc)
+        self.reactions.extend([rn, rc])
+        calb_rxn = rxd.Reaction(self.calb + self.ca, self.calbca,
+                                kf_calbindin,
+                                kb_calbindin)
+        self.reactions.append(calb_rxn)
+
+        
     def _make_object_lists(self):
         self.shell_list = []
+        self.outside_shell_list []
         self.ER_regions = []
         self.membrane_list = []
-        for key in self.inside_shells.keys():
-            self.shell_list.extend(self.inside_shells[key])
-            self.ER_regions.extend(self.inside_shells[key])
-        for key in self.outside_shells.keys():
-            self.shell_list.extend(self.outside_shells[key])
-            self.membrane_list.append(self.outside_shells[key][0])
+        for key in self.ER_shells.keys():
+            self.shell_list.extend(self.ER_shells[key])
+            self.ER_regions.extend(self.ER_shells[key])
+        for key in self.cyt_shells.keys():
+            self.shell_list.extend(self.cyt_shells[key])
+            self.outside_shell_list.extend(self.cyt_shells[key])
+            self.membrane_list.append(self.cyt_shells[key][0])
 
     def add_serca_and_leak(self):
         self.leak = []
         for key in self.membrane.keys():
-            pump1 = rxd.Reaction(2*self.ca[self.outside_shells[key][0]]
-                                 +self.serca[self.outside_shells[key][0]],
-                                 self.sercaca[self.outside_shells[key][0]],
+            pump1 = rxd.Reaction(2*self.ca[self.cyt_shells[key][0]]
+                                 +self.serca[self.cyt_shells[key][0]],
+                                 self.sercaca[self.cyt_shells[key][0]],
                                  kfserca, kbserca)
-            pump2 = rxd.Reaction(self.sercaca[self.outside_shells[key][0]],
-                                 2*self.ca[self.inside_shells[key][0]]
-                                 +self.serca[self.outside_shells[key][0]],
+            pump2 = rxd.Reaction(self.sercaca[self.cyt_shells[key][0]],
+                                 2*self.ca[self.ER_shells[key][0]]
+                                 +self.serca[self.cyt_shells[key][0]],
                                  kcatserca, 0)
             self.reactions.extend([pump1, pump2])
             gleak = rxd.Parameter(ca_region, value=lambda nd:
@@ -210,7 +285,12 @@ class InsideER:
 
 
         This either needs ghk added, to actually account for the ER potential,
-        which is roughly 95 mV, or a rewrite to mod
+        which is roughly 30 mV (ghk with K and Na, ER membrane is pearmeable 
+        to both to similar extent), or a rewrite to mod (better option, JJS)
+        pca/pk of IP3R is 6 
+        Foskett JK, White C, Cheung KH, Mak DO 2007. 
+        Inositol trisphosphate receptor Ca2+ release channels. 
+        Physiol Rev 87: 593–658
         """
         self.gip3r = rxd.Parameter(self.cyt_er_membrane_list,
                                    initial=self.params["gip3r"])
@@ -222,8 +302,8 @@ class InsideER:
         self.ip3r = []
         ip3_init = self.params["ip3_init"]
         for i, key in enumerate(self.ER.keys()):
-            er_region =	self.outside_shells[key][0]
-            ca_region =	self.inside_shells[key][0]
+            er_region =	self.cyt_shells[key][0]
+            ca_region =	self.ER_shells[key][0]
             membrane = self.membrane[key]
             self.m.append(self.ip3[ca_region]/(self.ip3[ca_region] +
                                                self.params["Kip3"]))
@@ -237,15 +317,21 @@ class InsideER:
             self.ip3rg.append(rxd.Rate(self.h_gate[membrane],
                                        (self.h_inf[i] - self.h_gate[membrane])
                                        /self.params["ip3rtau"]))
-            self.k = self.gip3r[membrane] * (minf * self.h_gate[membrane]) ** 3
+            self.ip3_rate = self.gip3r[membrane] * (minf * self.h_gate[membrane]) ** 3
 
             self.ip3r.append(rxd.MultiCompartmentReaction(self.ca[er_region],
                                                           self.ca[ca_region],
-                                                          self.k, self.k,
+                                                          0.85*self.ip3_rate,
+                                                          0.85*self.ip3_rate,
+                                                          membrane=membrane))
+            self.ip3r.append(rxd.MultiCompartmentReaction(self.k[er_region],
+                                                          self.k[ca_region],
+                                                          0.85*self.ip3_rate,
+                                                          0.85*self.ip3_rate,
                                                           membrane=membrane))
         
             # IP3 degradation
-            for shell in self.shells[key]:
+            for shell in self.cyt_shells[key]:
                 self.reactions.append(rxd.Rate(self.ip3,
                                                (ip3_init-self.ip3[shell])
                                                /ip3degTau,
@@ -257,8 +343,8 @@ class InsideER:
         caDiff = self.params["caDiff"]
         diffusions = self.params["diffusions"]
         self.drs = []
-        for sec_name in self.inside_shells.keys():
-            for i, shell in enumerate(self.inside_shells[sec_name][:-1]):
+        for sec_name in self.ER_shells.keys():
+            for i, shell in enumerate(self.ER_shells[sec_name][:-1]):
                 dname = sec_name.replace("[", "").replace("]", "")
                 f = self.factors[sec_name][i]
                 dr = rxd.Parameter(self.inside_borders[sec_name][i],
@@ -267,33 +353,33 @@ class InsideER:
                                    nd.segment.diam/2/f)
                 self.drs.append(dr)
                 rxn = rxd.MultiCompartmentReaction(self.ca[shell],
-                                                   self.ca[self.inside_shells[sec_name][i+1]], 
+                                                   self.ca[self.ER_shells[sec_name][i+1]], 
                                                    c_unit*caDiff/dr, 
                                                    c_unit*caDiff/dr,
                                                    border=self.inside_borders[sec_name][i])
                 self.diffusions.append(rxn)
                 rxn = rxd.MultiCompartmentReaction(self.k[shell],
-                                                   self.k[self.inside_shells[sec_name][i+1]], 
+                                                   self.k[self.ER_shells[sec_name][i+1]], 
                                                    c_unit*caDiff/dr, 
                                                    c_unit*caDiff/dr,
                                                    border=self.inside_borders[sec_name][i])
                 self.diffusions.append(rxn)
 
-                
+            for i, shell in enumerate(self.cyt_shells[sec_name][:-1]):
                 f = i+1
                 dr = rxd.Parameter(self.outside_borders[sec_name][i],
                                    name=dname, 
                                    value=lambda nd:
                                    nd.segment.diam/2/f)
                 self.drs.append(dr)
-                rxn = rxd.MultiCompartmentReaction(self.ca[self.outside_shells[sec_name][i+1]],
-                                                   self.ca[self.outside_shells[sec_name][i]],
+                rxn = rxd.MultiCompartmentReaction(self.ca[self.cyt_shells[sec_name][i+1]],
+                                                   self.ca[shell],
                                                    c_unit*caDiff/dr, 
                                                    c_unit*caDiff/dr,
                                                    border=self.outside_borders[sec_name][i])
                 self.diffusions.append(rxn)
-                rxn = rxd.MultiCompartmentReaction(self.k[self.outside_shells[sec_name][i+1]],
-                                                   self.k[self.outside_shells[sec_name][i]],
+                rxn = rxd.MultiCompartmentReaction(self.k[self.cyt_shells[sec_name][i+1]],
+                                                   self.k[shell],
                                                    c_unit*caDiff/dr, 
                                                    c_unit*caDiff/dr,
                                                    border=self.outside_borders[sec_name][i])
